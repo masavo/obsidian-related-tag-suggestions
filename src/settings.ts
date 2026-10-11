@@ -11,9 +11,15 @@ export function readSettings(value: unknown): RelatedTagsSettings {
   };
 }
 export const TESTED_VERSION = '1.14.4';
-export function compatibilityReason(desktop: boolean, atLeastTested: boolean, atLeastNext: boolean, method: unknown, experimentalMobile = false): string | null {
-  if (!desktop && !experimentalMobile) return 'Mobile experiment is off. Enable it only in a test vault; real iPhone validation is pending.';
-  if (!atLeastTested || atLeastNext) return `Tested on Obsidian ${TESTED_VERSION} only. Standard suggestions are unchanged on other versions.`;
-  if (typeof method !== 'function') return 'This app does not expose the expected suggestions interface. Standard suggestions are unchanged.';
+export const IOS_TRIAL_VERSION = '1.14.5';
+export interface AdapterEnvironment { apiVersion: string; isDesktopApp: boolean; isMobileApp: boolean; isIosApp: boolean }
+export function compatibilityReason(environment: AdapterEnvironment, method: unknown, experimentalMobile = false): string | null {
+  const { apiVersion, isDesktopApp, isMobileApp, isIosApp } = environment;
+  if (!isDesktopApp && !experimentalMobile) return 'モバイル実験モードはオフです。隔離したテスト Vault で有効にしてください。実 iPhone の検証は継続中です。';
+  // Exact API strings: the iOS package/build label is never treated as a core API version.
+  const baseline = apiVersion === TESTED_VERSION;
+  const iosTrial = apiVersion === IOS_TRIAL_VERSION && !isDesktopApp && isMobileApp && isIosApp && experimentalMobile;
+  if (!baseline && !iosTrial) return `現在の API: ${apiVersion}。API ${TESTED_VERSION} と、明示的な iOS 実験の API ${IOS_TRIAL_VERSION} だけを対象にします。対象外では並び替えを停止し、標準候補を表示します。`;
+  if (typeof method !== 'function') return '想定する候補インターフェースがありません。並び替えを停止し、標準候補を表示します。';
   return null;
 }

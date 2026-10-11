@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, getAllTags, parseFrontMatterTags, requireApiVersion } from 'obsidian';
+import { AbstractInputSuggest, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, apiVersion, getAllTags, parseFrontMatterTags } from 'obsidian';
 import { normalizeTag, rankCandidates, type NativeTagCandidate } from './ranking';
 import { patchMethod } from './patch';
 import { observeAdditions, type TagMultiSelect } from './addition-patch';
@@ -7,7 +7,7 @@ import { TagFrequencyIndex } from './frequency-index';
 import { TagRecency } from './recency';
 import { StateStore } from './state-store';
 import { previousStateDrain, retainStateDrain } from './state-lifecycle';
-import { DEFAULT_SETTINGS, TESTED_VERSION, compatibilityReason, readSettings, type RelatedTagsSettings, type SortMode } from './settings';
+import { DEFAULT_SETTINGS, TESTED_VERSION, IOS_TRIAL_VERSION, compatibilityReason, readSettings, type RelatedTagsSettings, type SortMode } from './settings';
 
 // Private runtime interfaces, guarded on exactly the tested version and component shape.
 interface NativeSuggestRuntime {
@@ -20,11 +20,12 @@ interface TagScope { input: HTMLElement; property: Element; view: MarkdownView }
 interface PropertyRuntime { containerEl: HTMLElement; rendered?: { multiselect?: TagMultiSelect } }
 interface Toolbar { element: HTMLElement; buttons: HTMLButtonElement[]; caption: HTMLElement; dispose(): void }
 type AdapterState = 'active' | 'paused' | 'unsupported' | 'error';
+type ScopeResult = 'not-observed' | 'different-app' | 'unexpected-input' | 'outside-tags' | 'no-markdown-owner' | 'missing-file' | 'matched';
 
 export default class RelatedTagSuggestionsPlugin extends Plugin {
   settings: RelatedTagsSettings = { ...DEFAULT_SETTINGS };
   status: { state: AdapterState; reason: string } = { state: 'paused', reason: 'Loading.' };
-  readonly diagnostics = { transforms: 0, indexUpdates: 0, indexedNotes: 0, recordedAdditions: 0, restored: true };
+  readonly diagnostics = { transforms: 0, indexUpdates: 0, indexedNotes: 0, recordedAdditions: 0, restored: true, inputEvents: 0, tagsFieldEvents: 0, suggestionCalls: 0, scopedCalls: 0, lastScope: 'not-observed' as ScopeResult };
   private index = new TagFrequencyIndex();
   private indexReady = false;
   private recent = new TagRecency();
@@ -85,6 +86,18 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
     try { await this.stateStore.replace(() => this.loadData(), value => { this.loadState(value); this.configureAdapter(); return this.snapshot(); }); }
     catch { this.failAdapter('Could not reload local preferences. Standard suggestions are unchanged.'); }
   }
+  diagnosticReport(): string {
+    const d = this.diagnostics;
+    return [
+      `Plugin: ${this.manifest.version}; API: ${apiVersion}; baseline API: ${TESTED_VERSION}; opt-in iOS trial API: ${IOS_TRIAL_VERSION}`,
+      `desktopApp=${Platform.isDesktopApp}; mobileApp=${Platform.isMobileApp}; iOS=${Platform.isIosApp}; mobileUI=${Platform.isMobile}`,
+      `sorting=${this.settings.enabled}; mobileExperiment=${this.settings.experimentalMobile}; mode=${this.settings.sortMode}`,
+      `state=${this.status.state}; installed=${this.restore !== null}; nativeRestored=${d.restored}`,
+      this.status.reason,
+      `inputEvents=${d.inputEvents}; tagsFieldEvents=${d.tagsFieldEvents}; suggestionCalls=${d.suggestionCalls}; scopedCalls=${d.scopedCalls}`,
+      `lastScope=${d.lastScope}; transforms=${d.transforms}`,
+    ].join('\n');
+  }
   private loadState(value: unknown): void {
     this.settings = readSettings(value);
     this.recent = new TagRecency(value && typeof value === 'object' ? (value as Record<string, unknown>).recent : undefined);
@@ -97,6 +110,13 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
   private bindWindow(win: Window): void {
     if (this.windows.has(win)) return;
     this.windows.add(win);
+    const observeInputEvent = (event: Event): void => {
+      this.diagnostics.inputEvents++;
+      const target = event.target;
+      if (isElement(target) && target.closest('.metadata-property[data-property-key="tags"]')) this.diagnostics.tagsFieldEvents++;
+    };
+    this.registerDomEvent(win, 'focusin', observeInputEvent, true);
+    this.registerDomEvent(win, 'input', observeInputEvent, true);
     this.registerDomEvent(win, 'compositionstart', event => {
       const scope = this.tagScope(event.target);
       if (scope) { this.composing.add(scope.input); this.updateToolbars(); }
@@ -120,29 +140,33 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
   private configureAdapter(): void {
     this.stopAdapter(true);
     if (!this.settings.enabled) { this.status = { state: 'paused', reason: 'Sorting is off. Standard suggestions are unchanged.' }; return; }
-    const prototype = AbstractInputSuggest.prototype as unknown as Partial<PrivatePrototype>;
-    const reason = compatibilityReason(Platform.isDesktopApp, requireApiVersion(TESTED_VERSION), requireApiVersion('1.14.5'), prototype.showSuggestions, this.settings.experimentalMobile);
+    const prototype = AbstractInputSuggest?.prototype as unknown as Partial<PrivatePrototype> | undefined;
+    const reason = compatibilityReason({ apiVersion, isDesktopApp: Platform.isDesktopApp, isMobileApp: Platform.isMobileApp, isIosApp: Platform.isIosApp }, prototype?.showSuggestions, this.settings.experimentalMobile);
     if (reason) { this.status = { state: 'unsupported', reason }; return; }
     try {
       this.restore = patchMethod(prototype as PrivatePrototype, (context, values) => {
-        if (context.app !== this.app) return values;
-        const scope = this.tagScope(context.textInputEl ?? null);
-        if (!scope?.view.file) return values;
+        this.diagnostics.suggestionCalls++;
+        if (context.app !== this.app) { this.diagnostics.lastScope = 'different-app'; return values; }
+        const scope = this.tagScope(context.textInputEl ?? null, true);
+        if (!scope?.view.file) { if (scope) this.diagnostics.lastScope = 'missing-file'; return values; }
+        this.diagnostics.scopedCalls++;
         this.guardRuntime(context, values); this.observeInput(scope);
         const query = context.getValue();
         if (typeof query !== 'string') throw new Error('Unsupported input value');
         const ranked = rankCandidates(values, scope.view.file.basename, query, this.counts(), this.existingTags(scope.property), this.settings.prioritizeTitle,
           this.settings.sortMode === 'recent' ? this.recent.getOrders() : undefined);
-        this.diagnostics.transforms++; return ranked;
+        this.diagnostics.transforms++;
+        this.status.reason = `標準 tags 候補の並び替えを確認しました（API ${apiVersion}）。`;
+        return ranked;
       }, () => this.failAdapter('Tag adapter stopped after an incompatible response. Standard suggestions are restored. Reload the plugin to retry.'), context => {
         if (context.app === this.app && this.tagScope(context.textInputEl ?? null)) this.ensureToolbar(context);
       });
-      this.diagnostics.restored = false; this.status = { state: 'active', reason: Platform.isDesktopApp ? `Ready on desktop Obsidian ${TESTED_VERSION}.` : `Experimental mobile adapter on Obsidian ${TESTED_VERSION}. Real iPhone validation is pending.` };
+      this.diagnostics.restored = false; this.status = { state: 'active', reason: `候補フックを設置しました（API ${apiVersion}）。tags 欄で並び替えが動いたかは診断情報で確認してください。実 iPhone の検証は継続中です。` };
     } catch { this.failAdapter('Could not start tag adapter. Standard suggestions are unchanged.'); }
   }
   private guardRuntime(context: NativeSuggestRuntime, values: NativeTagCandidate[]): void {
     if (!Array.isArray(values) || !values.every(isTagCandidate) || typeof context.getValue !== 'function' || typeof context.onInputChange !== 'function' || typeof context.reposition !== 'function' ||
-      !isElement(context.suggestEl) || !context.suggestions || !Array.isArray(context.suggestions.values) || typeof context.suggestions.forceSetSelectedItem !== 'function') throw new Error('Unsupported candidate interface');
+      typeof context.isOpen !== 'boolean' || !isPopoverElement(context.suggestEl) || !context.suggestions || !Array.isArray(context.suggestions.values) || !Number.isInteger(context.suggestions.selectedItem) || typeof context.suggestions.forceSetSelectedItem !== 'function') throw new Error('Unsupported candidate interface');
   }
   private observeInput(scope: TagScope): void {
     for (const [target, hook] of this.additionHooks) if (!hook.input.isConnected) { hook.restore(); this.additionHooks.delete(target); }
@@ -240,11 +264,15 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
       if (scope && shouldDiscardPendingTag(action, scope.input.textContent ?? '', this.existingTags(scope.property), isComposing || this.composing.has(scope.input))) scope.input.textContent = '';
     } catch { this.failAdapter('Input compatibility changed. Standard suggestions are restored.'); }
   }
-  private tagScope(target: EventTarget | null): TagScope | null {
-    if (!isElement(target) || !target.matches('.multi-select-input[contenteditable="true"]')) return null;
-    const property = target.closest('.metadata-property[data-property-key="tags"]'); if (!property) return null;
+  private tagScope(target: EventTarget | null, diagnose = false): TagScope | null {
+    if (!isElement(target) || !target.matches('.multi-select-input[contenteditable="true"]')) {
+      if (diagnose) this.diagnostics.lastScope = 'unexpected-input'; return null;
+    }
+    const property = target.closest('.metadata-property[data-property-key="tags"]');
+    if (!property) { if (diagnose) this.diagnostics.lastScope = 'outside-tags'; return null; }
     let owner: MarkdownView | null = null;
     this.app.workspace.iterateAllLeaves(leaf => { if (leaf.view instanceof MarkdownView && leaf.view.contentEl.contains(target)) owner = leaf.view; });
+    if (diagnose) this.diagnostics.lastScope = owner ? 'matched' : 'no-markdown-owner';
     return owner ? { input: target, property, view: owner } : null;
   }
   private existingTags(property: Element): string[] { return Array.from(property.querySelectorAll('.multi-select-pill-content'), element => element.textContent ?? ''); }
@@ -269,12 +297,20 @@ class RelatedTagsSettingTab extends PluginSettingTab {
         .onChange(async value => { await this.plugin.updateSettings({ sortMode: value as SortMode }); this.display(); }));
     new Setting(containerEl).setName('タイトル一致を優先').setDesc('頻度順だけに適用します。履歴順では適用しません。')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.prioritizeTitle).onChange(async value => { await this.plugin.updateSettings({ prioritizeTitle: value }); this.display(); }));
-    new Setting(containerEl).setName('モバイル実験モード').setDesc('Obsidian 1.14.4 のみ。Mac の mobile 表示で検証し、実 iPhone のタッチ・日本語入力は未検証です。隔離したテスト Vault で有効にしてください。')
+    new Setting(containerEl).setName('モバイル実験モード').setDesc('API 1.14.4 と、iOS の API 1.14.5 を対象にする実験です。1.14.5 は形状検査を通った候補だけ並び替えます。実 iPhone のタッチ・日本語入力は検証中です。隔離したテスト Vault で有効にしてください。')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.experimentalMobile).onChange(async value => { await this.plugin.updateSettings({ experimentalMobile: value }); this.display(); }));
-    new Setting(containerEl).setName('対応環境').setDesc(this.plugin.status.reason);
+    new Setting(containerEl).setName('対応環境').setDesc(`現在の API: ${apiVersion} ／ 基準 API: ${TESTED_VERSION} ／ iOS 実験 API: ${IOS_TRIAL_VERSION}\n${this.plugin.status.reason}`);
+    new Setting(containerEl).setName('診断情報').setDesc('tags 欄を開いてから更新すると、フックが候補へ届いたか確認できます。この起動中の回数と状態だけを表示し、ノート・タグ・検索語は含めません。')
+      .addButton(button => button.setButtonText('診断を更新').onClick(() => this.display()));
+    containerEl.createEl('pre', { cls: 'related-tags-diagnostics', text: this.plugin.diagnosticReport() });
   }
 }
 function isElement(value: unknown): value is HTMLElement { return !!value && typeof value === 'object' && typeof (value as HTMLElement).matches === 'function'; }
+function isPopoverElement(value: unknown): value is HTMLElement {
+  if (!isElement(value)) return false;
+  const doc = value.ownerDocument;
+  return value.nodeType === 1 && typeof value.prepend === 'function' && doc?.nodeType === 9 && typeof doc.createElement === 'function';
+}
 function isTagCandidate(value: unknown): value is NativeTagCandidate {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<NativeTagCandidate>;

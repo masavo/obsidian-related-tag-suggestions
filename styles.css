@@ -7,3 +7,5 @@
 
 body.is-mobile .related-tags-modes button { min-height: 44px; touch-action: manipulation; }
 body.is-mobile .related-tags-caption { white-space: normal; }
+
+.related-tags-diagnostics { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-size: var(--font-ui-smaller); }

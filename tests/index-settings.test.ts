@@ -39,11 +39,13 @@ test('unknown preferences are ignored while valid false values are retained', ()
   assert.deepEqual(readSettings({ enabled: 'false', prioritizeTitle: null }), { enabled: true, prioritizeTitle: true, sortMode: 'frequency', experimentalMobile: false });
   assert.deepEqual(readSettings(null), { enabled: true, prioritizeTitle: true, sortMode: 'frequency', experimentalMobile: false });
 });
-test('compatibility refuses mobile, older/future app versions and missing private method', () => {
-  assert.equal(compatibilityReason(true, true, false, () => undefined), null);
-  for (const [desktop, tested, next, method] of [[false, true, false, () => undefined], [true, false, false, () => undefined], [true, true, true, () => undefined], [true, true, false, undefined]] as const) {
-    assert.notEqual(compatibilityReason(desktop, tested, next, method), null);
-  }
+test('baseline compatibility requires exact API and mobile opt-in plus the private method', () => {
+  const desktop = { apiVersion: '1.14.4', isDesktopApp: true, isMobileApp: false, isIosApp: false };
+  assert.equal(compatibilityReason(desktop, () => undefined), null);
+  assert.notEqual(compatibilityReason({ ...desktop, apiVersion: '1.14.5' }, () => undefined, true), null);
+  assert.notEqual(compatibilityReason({ ...desktop, apiVersion: '1.14.3' }, () => undefined), null);
+  assert.notEqual(compatibilityReason({ ...desktop, isDesktopApp: false, isMobileApp: true }, () => undefined), null);
+  assert.notEqual(compatibilityReason(desktop, undefined), null);
 });
 test('adapter failure is reported once, future calls retain native array and unload restores identity', () => {
   const seen: string[][] = [];
@@ -79,11 +81,17 @@ test('toolbar failure after native rendering does not render twice and disables 
   assert.equal(renders, 2); assert.equal(failures, 1); restore();
 });
 
-test('mobile requires explicit experiment and exact version plus expected method', () => {
-  assert.equal(compatibilityReason(false, true, false, () => undefined, true), null);
-  assert.notEqual(compatibilityReason(false, false, false, () => undefined, true), null);
-  assert.notEqual(compatibilityReason(false, true, true, () => undefined, true), null);
-  assert.notEqual(compatibilityReason(false, true, false, undefined, true), null);
+test('iOS 1.14.5 trial is exact, platform-specific, opt-in and shape-gated', () => {
+  const ios = { apiVersion: '1.14.5', isDesktopApp: false, isMobileApp: true, isIosApp: true };
+  assert.equal(compatibilityReason(ios, () => undefined, true), null);
+  assert.notEqual(compatibilityReason(ios, () => undefined, false), null);
+  assert.notEqual(compatibilityReason({ ...ios, isIosApp: false }, () => undefined, true), null);
+  assert.notEqual(compatibilityReason({ ...ios, isMobileApp: false }, () => undefined, true), null);
+  assert.notEqual(compatibilityReason({ ...ios, isDesktopApp: true }, () => undefined, true), null);
+  assert.notEqual(compatibilityReason(ios, undefined, true), null);
+  for (const apiVersion of ['1.14.3', '1.14.6', '1.14.50', '1.14.5-beta', '1.14.5.1', '2.0.0', '']) {
+    assert.notEqual(compatibilityReason({ ...ios, apiVersion }, () => undefined, true), null);
+  }
   assert.equal(readSettings({ experimentalMobile: 'true' }).experimentalMobile, false);
   assert.equal(readSettings({ experimentalMobile: true }).experimentalMobile, true);
 });
