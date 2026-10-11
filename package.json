@@ -1,0 +1,31 @@
+{
+  "name": "related-tag-suggestions",
+  "version": "0.4.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build",
+    "fixture": "node scripts/fixture.mjs",
+    "release:prepare": "npm run check && node scripts/package-release.mjs",
+    "release:check": "node scripts/check-release.mjs",
+    "release:check-public": "node scripts/check-release.mjs --public",
+    "benchmark": "node --import tsx scripts/benchmark.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@types/node": "24.10.1",
+    "esbuild": "0.25.12",
+    "eslint": "9.39.1",
+    "fflate": "0.8.3",
+    "obsidian": "1.14.4",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.1"
+  }
+}

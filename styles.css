@@ -1,0 +1,9 @@
+.related-tags-toolbar { padding: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.related-tags-modes { display: flex; gap: 4px; }
+.related-tags-modes button { flex: 1; min-height: 28px; font-size: var(--font-ui-small); box-shadow: none; }
+.related-tags-modes button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
+.related-tags-modes button[aria-disabled="true"] { opacity: .5; cursor: default; }
+.related-tags-caption { margin-top: 6px; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+body.is-mobile .related-tags-modes button { min-height: 44px; touch-action: manipulation; }
+body.is-mobile .related-tags-caption { white-space: normal; }

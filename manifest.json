@@ -1,0 +1,9 @@
+{
+  "id": "related-tag-suggestions",
+  "name": "Related Tag Suggestions",
+  "version": "0.4.0",
+  "minAppVersion": "1.14.4",
+  "description": "Find tags in the standard tags field, with frequency and recent-addition order selectable inside the native candidate list.",
+  "author": "masavo",
+  "isDesktopOnly": false
+}

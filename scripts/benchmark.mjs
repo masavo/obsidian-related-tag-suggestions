@@ -1,0 +1,12 @@
+import { performance } from 'node:perf_hooks';
+import { TagFrequencyIndex } from '../src/frequency-index.ts';
+import { rankCandidates } from '../src/ranking.ts';
+const index = new TagFrequencyIndex();
+const started = performance.now();
+for (let i = 0; i < 10000; i++) index.update(`synthetic-${i}.md`, Array.from({ length: 20 }, (_, n) => `topic-${(i * 7 + n) % 3000}/part`));
+const indexed = performance.now();
+const candidates = Array.from(index.getCounts().keys(), tag => ({ tag, score: 0, matches: null }));
+for (let i = 0; i < 20; i++) rankCandidates(candidates, 'topic-100', '', index.getCounts());
+const ranked = performance.now();
+for (let i = 0; i < 1000; i++) index.update('synthetic-5.md', [`edited-${i}`]);
+console.log(JSON.stringify({ syntheticNotes: 10000, tagsPerNote: 20, candidateCount: candidates.length, initialIndexMs: indexed - started, averageSortMs: (ranked - indexed) / 20, thousandIncrementalEditsMs: performance.now() - ranked, scope: 'Algorithm benchmark only; not Obsidian UI or a large real Vault guarantee.' }, null, 2));

@@ -1,0 +1,10 @@
+node_modules/
+main.js
+main.js.map
+.test-vault/
+release/
+publish/
+evidence/
+docs/
+app.js
+obsidian-public-current.d.ts
