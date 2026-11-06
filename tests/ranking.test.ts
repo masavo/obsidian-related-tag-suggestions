@@ -76,3 +76,16 @@ test('raw Enter deduplicates case and hash variants but preserves new tags and o
   assert.equal(shouldDiscardPendingTag('Tab', 'work', ['work'], false), false);
   assert.equal(shouldDiscardPendingTag('Enter', 'work', ['work'], true), false);
 });
+
+
+test('ABC order ignores title, usage and history while retaining native scores, candidates and deduplication', () => {
+  const values = ['zeta', 'Beta', 'alpha', '#ALPHA', 'existing'].map(tag => candidate(tag));
+  const counts = new Map([['zeta', 100], ['beta', 3]]);
+  const history = new Map([['zeta', 999]]);
+  const ranked = rankCandidates(values, 'zeta', '', counts, ['existing'], true, history, true);
+  assert.deepEqual(ranked.map(v => v.tag), ['alpha', 'Beta', 'zeta']);
+  assert.equal(ranked[0], values[2]);
+  assert.deepEqual(values.map(v => v.tag), ['zeta', 'Beta', 'alpha', '#ALPHA', 'existing']);
+  const searched = [candidate('zeta', 10), candidate('beta', 5), candidate('alpha', 5)];
+  assert.deepEqual(rankCandidates(searched, 'beta', 'a', counts, [], true, history, true).map(v => v.tag), ['zeta', 'alpha', 'beta']);
+});

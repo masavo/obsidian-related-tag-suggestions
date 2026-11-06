@@ -189,7 +189,7 @@ test('exact API 1.14.5 runs only the opt-in iOS trial and keeps native fuzzy rel
   h.suggest.showSuggestions(fuzzy); assert.equal(h.suggest.suggestions.values[0], fuzzy[0]);
   assert.match(h.plugin.diagnosticReport(), /API: 1.14.5/); h.plugin.onunload();
 });
-test('API 1.14.5 stays native on desktop, Android and non-mobile iOS flags', async () => {
+test('API 1.14.5 stays native on contradictory desktop/mobile flags, Android and non-mobile iOS flags', async () => {
   for (const options of [{ desktop: true }, { ios: false }, { mobileApp: false }]) {
     const h = host('1.14.5', { storedExperiment: true, ...options }); await h.plugin.onload(); h.suggest.showSuggestions(nativeValues);
     assert.equal(h.plugin.status.state, 'unsupported'); assert.equal(h.NativeSuggest.prototype.showSuggestions, h.original);
@@ -235,4 +235,21 @@ test('unknown popover DOM fails before sorting and retains the original native a
     assert.equal(h.suggest.suggestions.values, nativeValues); assert.equal(h.suggest.renders, 1);
     assert.equal(h.NativeSuggest.prototype.showSuggestions, h.original); h.plugin.onunload();
   }
+});
+
+
+test('desktop 1.14.5 installs, renders all three modes, switches ABC order and restores native rendering on unload', async () => {
+  const h = host('1.14.5', { desktop: true, mobileApp: false, ios: false });
+  await h.plugin.onload();
+  assert.equal(h.plugin.status.state, 'active');
+  h.suggest.showSuggestions(nativeValues);
+  assert.deepEqual(h.suggest.suggestions.values.map(v => v.tag), ['zulu', 'alpha']);
+  const toolbar = h.suggest.suggestEl.children[0]!;
+  assert.deepEqual(Array.from(toolbar.children[0]!.children, b => b.textContent), ['頻度順', '履歴順', 'ABC順']);
+  await h.plugin.updateSettings({ sortMode: 'alphabetical' });
+  assert.deepEqual(h.suggest.suggestions.values.map(v => v.tag), ['alpha', 'zulu']);
+  assert.equal(toolbar.children[0]!.children[2]!.attributes['aria-pressed'], 'true');
+  assert.equal(toolbar.children[1]!.textContent.startsWith('ABC順'), true);
+  h.plugin.onunload();
+  assert.equal(h.NativeSuggest.prototype.showSuggestions, h.original);
 });

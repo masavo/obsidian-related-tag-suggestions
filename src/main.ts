@@ -7,7 +7,7 @@ import { TagFrequencyIndex } from './frequency-index';
 import { TagRecency } from './recency';
 import { StateStore } from './state-store';
 import { previousStateDrain, retainStateDrain } from './state-lifecycle';
-import { DEFAULT_SETTINGS, TESTED_VERSION, IOS_TRIAL_VERSION, compatibilityReason, readSettings, type RelatedTagsSettings, type SortMode } from './settings';
+import { DEFAULT_SETTINGS, SORT_MODES, SORT_LABELS, nextSortMode, TESTED_VERSION, IOS_TRIAL_VERSION, compatibilityReason, readSettings, type RelatedTagsSettings, type SortMode } from './settings';
 
 // Private runtime interfaces, guarded on exactly the tested version and component shape.
 interface NativeSuggestRuntime {
@@ -131,7 +131,7 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
         const scope = this.tagScope(event.target);
         if (scope && !this.composing.has(scope.input) && [...this.toolbars.keys()].some(context => context.isOpen && context.textInputEl === scope.input)) {
           event.preventDefault(); event.stopPropagation();
-          void this.updateSettings({ sortMode: this.settings.sortMode === 'frequency' ? 'recent' : 'frequency' });
+          void this.updateSettings({ sortMode: nextSortMode(this.settings.sortMode) });
         }
       }
     }, true);
@@ -154,7 +154,7 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
         const query = context.getValue();
         if (typeof query !== 'string') throw new Error('Unsupported input value');
         const ranked = rankCandidates(values, scope.view.file.basename, query, this.counts(), this.existingTags(scope.property), this.settings.prioritizeTitle,
-          this.settings.sortMode === 'recent' ? this.recent.getOrders() : undefined);
+          this.settings.sortMode === 'recent' ? this.recent.getOrders() : undefined, this.settings.sortMode === 'alphabetical');
         this.diagnostics.transforms++;
         this.status.reason = `標準 tags 候補の並び替えを確認しました（API ${apiVersion}）。`;
         return ranked;
@@ -190,9 +190,9 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
       const doc = context.suggestEl.ownerDocument;
       const element = doc.createElement('div'); element.className = 'related-tags-toolbar';
       const group = doc.createElement('div'); group.className = 'related-tags-modes'; group.setAttribute('role', 'group'); group.setAttribute('aria-label', 'タグ候補の順序');
-      const buttons = (['frequency', 'recent'] as const).map(mode => {
+      const buttons = SORT_MODES.map(mode => {
         const button = doc.createElement('button'); button.type = 'button'; button.tabIndex = -1;
-        button.textContent = mode === 'frequency' ? '頻度順' : '履歴順'; button.dataset.mode = mode;
+        button.textContent = SORT_LABELS[mode]; button.dataset.mode = mode;
         button.setAttribute('aria-label', `${button.textContent}へ切り替え${Platform.isMobile ? '' : ' (Alt+S)'}`); group.append(button); return button;
       });
       const caption = doc.createElement('div'); caption.className = 'related-tags-caption';
@@ -203,7 +203,7 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
         const target = event.target;
         if (!isElement(target)) return;
         const mode = target.closest('button')?.dataset.mode;
-        if ((mode === 'frequency' || mode === 'recent') && mode !== this.settings.sortMode && context.textInputEl && !this.composing.has(context.textInputEl)) void this.updateSettings({ sortMode: mode });
+        if ((mode === 'frequency' || mode === 'recent' || mode === 'alphabetical') && mode !== this.settings.sortMode && context.textInputEl && !this.composing.has(context.textInputEl)) void this.updateSettings({ sortMode: mode });
       };
       const pointerDown = (event: PointerEvent): void => { retainInput(event); if (event.pointerType === 'touch' || event.pointerType === 'pen') switchMode(event); };
       element.addEventListener('pointerdown', pointerDown); element.addEventListener('mousedown', retainInput); element.addEventListener('click', switchMode);
@@ -223,7 +223,7 @@ export default class RelatedTagSuggestionsPlugin extends Plugin {
       }
       const shortcut = Platform.isMobile ? '' : Platform.isMacOS ? ' · ⌥S' : ' · Alt+S';
       toolbar.caption.textContent = (composing ? '変換中は切替を待ちます' : context.getValue().trim() ? '検索の一致度を優先' :
-        this.settings.sortMode === 'recent' ? '履歴順' : this.settings.prioritizeTitle ? 'タイトル一致 → 頻度順' : '頻度順') + (composing ? '' : shortcut);
+        this.settings.sortMode === 'alphabetical' ? 'ABC順' : this.settings.sortMode === 'recent' ? '履歴順' : this.settings.prioritizeTitle ? 'タイトル一致 → 頻度順' : '頻度順') + (composing ? '' : shortcut);
     }
   }
   private refreshOpenSuggestions(): void {
@@ -293,9 +293,9 @@ class RelatedTagsSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('候補の並び替えを有効化').setDesc('標準 tags 欄の候補を並び替えます。')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.enabled).onChange(async value => { await this.plugin.updateSettings({ enabled: value }); this.display(); }));
     new Setting(containerEl).setName('候補の順序').setDesc('候補窓でも切り替えできます。履歴順は、この版の導入後に標準 tags 欄から追加・保存できたタグを新しい順に表示します。閲覧や検索だけでは履歴は増えません。')
-      .addDropdown(dropdown => dropdown.addOption('frequency', '頻度順').addOption('recent', '履歴順').setValue(this.plugin.settings.sortMode)
+      .addDropdown(dropdown => dropdown.addOption('frequency', '頻度順').addOption('recent', '履歴順').addOption('alphabetical', 'ABC順').setValue(this.plugin.settings.sortMode)
         .onChange(async value => { await this.plugin.updateSettings({ sortMode: value as SortMode }); this.display(); }));
-    new Setting(containerEl).setName('タイトル一致を優先').setDesc('頻度順だけに適用します。履歴順では適用しません。')
+    new Setting(containerEl).setName('タイトル一致を優先').setDesc('頻度順だけに適用します。履歴順・ABC順では適用しません。')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.prioritizeTitle).onChange(async value => { await this.plugin.updateSettings({ prioritizeTitle: value }); this.display(); }));
     new Setting(containerEl).setName('モバイル実験モード').setDesc('API 1.14.4 と、iOS の API 1.14.5 を対象にする実験です。1.14.5 は形状検査を通った候補だけ並び替えます。実 iPhone のタッチ・日本語入力は検証中です。隔離したテスト Vault で有効にしてください。')
       .addToggle(toggle => toggle.setValue(this.plugin.settings.experimentalMobile).onChange(async value => { await this.plugin.updateSettings({ experimentalMobile: value }); this.display(); }));

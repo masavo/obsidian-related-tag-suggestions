@@ -29,7 +29,7 @@ export function titleMatch(tag: string, title: string): boolean {
 const collator = new Intl.Collator('ja');
 export function rankCandidates<T extends NativeTagCandidate>(
   candidates: readonly T[], title: string, query: string, counts: ReadonlyMap<string, number>, existing: readonly string[] = [], prioritizeTitle = true,
-  recent?: ReadonlyMap<string, number>
+  recent?: ReadonlyMap<string, number>, alphabetical = false
 ): T[] {
   const seen = new Set(existing.map(normalizeTag));
   const filtered = candidates.filter(candidate => {
@@ -41,8 +41,8 @@ export function rankCandidates<T extends NativeTagCandidate>(
   const searching = normalizeTag(query).length > 0;
   return filtered.map(value => ({ value, name: normalizeTag(value.tag), related: prioritizeTitle && titleMatch(value.tag, title), count: counts.get(normalizeTag(value.tag)) ?? 0 }))
     .sort((left, right) => (searching ? right.value.score - left.value.score : 0)
-      || (recent ? (recent.get(right.name) ?? 0) - (recent.get(left.name) ?? 0) : Number(right.related) - Number(left.related))
-      || right.count - left.count
+      || (alphabetical ? 0 : recent ? (recent.get(right.name) ?? 0) - (recent.get(left.name) ?? 0) : Number(right.related) - Number(left.related))
+      || (alphabetical ? 0 : right.count - left.count)
       || collator.compare(left.name, right.name))
     .map(item => item.value);
 }

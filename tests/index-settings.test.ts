@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TagFrequencyIndex } from '../src/frequency-index';
-import { compatibilityReason, readSettings } from '../src/settings';
+import { compatibilityReason, readSettings, nextSortMode, SORT_MODES } from '../src/settings';
 import { rankCandidates } from '../src/ranking';
 import { patchMethod } from '../src/patch';
 import { shouldDiscardPendingTag } from '../src/input-policy';
@@ -42,7 +42,8 @@ test('unknown preferences are ignored while valid false values are retained', ()
 test('baseline compatibility requires exact API and mobile opt-in plus the private method', () => {
   const desktop = { apiVersion: '1.14.4', isDesktopApp: true, isMobileApp: false, isIosApp: false };
   assert.equal(compatibilityReason(desktop, () => undefined), null);
-  assert.notEqual(compatibilityReason({ ...desktop, apiVersion: '1.14.5' }, () => undefined, true), null);
+  assert.equal(compatibilityReason({ ...desktop, apiVersion: '1.14.5' }, () => undefined), null);
+  assert.notEqual(compatibilityReason({ ...desktop, apiVersion: '1.14.6' }, () => undefined), null);
   assert.notEqual(compatibilityReason({ ...desktop, apiVersion: '1.14.3' }, () => undefined), null);
   assert.notEqual(compatibilityReason({ ...desktop, isDesktopApp: false, isMobileApp: true }, () => undefined), null);
   assert.notEqual(compatibilityReason(desktop, undefined), null);
@@ -94,4 +95,15 @@ test('iOS 1.14.5 trial is exact, platform-specific, opt-in and shape-gated', () 
   }
   assert.equal(readSettings({ experimentalMobile: 'true' }).experimentalMobile, false);
   assert.equal(readSettings({ experimentalMobile: true }).experimentalMobile, true);
+});
+
+
+test('mode persists and cycles in frequency, history, ABC order', () => {
+  assert.deepEqual(SORT_MODES, ['frequency', 'recent', 'alphabetical']);
+  assert.equal(nextSortMode('frequency'), 'recent');
+  assert.equal(nextSortMode('recent'), 'alphabetical');
+  assert.equal(nextSortMode('alphabetical'), 'frequency');
+  assert.equal(readSettings({sortMode: 'alphabetical'}).sortMode, 'alphabetical');
+  assert.equal(readSettings({sortMode: 'recent'}).sortMode, 'recent');
+  assert.equal(readSettings({sortMode: 'unknown'}).sortMode, 'frequency');
 });
